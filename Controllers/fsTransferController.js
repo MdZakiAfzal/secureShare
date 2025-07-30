@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 
+//Blockhain setup
 const { ethers } = require("ethers");
 const contractABI = require(`${__dirname}/../blockchain/contractABI.json`);
 
@@ -12,7 +13,7 @@ const provider = new ethers.JsonRpcProvider(process.env.INFURA_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 const contract = new ethers.Contract(process.env.CONTRACT_ADDRESS, contractABI, wallet);
 
-
+//Logic for File upload to the Database
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
         cb(null, 'file-uploads/')
@@ -54,11 +55,13 @@ const upload = multer({
 
 const fileStore = new Map();
 
+// Generate File hash Function
 const generateFileHash = (filePath) => {
   const fileBuffer = fs.readFileSync(filePath);
   return crypto.createHash('sha256').update(fileBuffer).digest('hex');
 };
 
+// Controllers
 exports.fsUpload =[ 
     upload.single('file'),
     catchAsync( async (req, res, next)=>{
@@ -66,25 +69,16 @@ exports.fsUpload =[
             return next(new AppError('Please upload a file first', 404));
         }
 
-        // generae file hash
+        // generate file hash
         const fileHash = generateFileHash(req.file.path);
-        console.log("File Hash:", fileHash);
-
         const hexHash = "0x" + fileHash;
 
         // send filehash to the network
-        try {
-            const tx = await contract.uploadFileHash(hexHash);
-            await tx.wait(); // wait for transaction to be mined
-            console.log("✅ File hash stored on-chain.");
-        } catch (err) {
-            console.error("Blockchain write failed:", err);
-            return next(new AppError('Failed to store file hash on blockchain', 500));
-        }
-
+        const tx = await contract.uploadFileHash(hexHash);
+        await tx.wait(); // wait for transaction to be mined
+        console.log("✅ File hash stored on-chain.");
         
-        
-        
+        //Set file Metadata and share Link
         const token = crypto.randomBytes(16).toString('hex');
 
         const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${req.file.filename}`;
@@ -95,6 +89,8 @@ exports.fsUpload =[
             expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
         });
         const shareableLink = `${req.protocol}://${req.get('host')}/api/files/share/${token}`;
+
+        //send response
         res.status(201).json({
             status: 'success',
             fileData: req.file,
@@ -106,18 +102,42 @@ exports.fsUpload =[
 exports.fsShare = catchAsync(async (req, res, next) => {
     const { token } = req.params;
 
-    // Verify token exists and isn't expired
+    // Verify token exists
     const fileData = fileStore.get(token);
-    if (!fileData || fileData.expiresAt < Date.now()) {
-        fileStore.delete(token); // Cleanup
-        return next(new AppError('Invalid or expired download link', 404));
+
+    if(!fileData){
+        return next(new AppError(`Invalid Token: ${token}`, 404));
     }
 
+    // Verify file exits
+    const filePath = path.join('file-uploads', fileData.filename);
+
+    if (!fs.existsSync(filePath)) {
+        return next(new AppError('File not found', 404));
+    }
+
+    //Check expiry
+    if (fileData.expiresAt < Date.now()) {
+        // Cleanup
+        fileStore.delete(token); 
+        fs.unlinkSync(filePath);
+        return next(new AppError('Expired download link', 404));
+    }
+
+    //verify file from Blockchain
+    const fileHash = generateFileHash(filePath);
+    const hexHash = "0x" + fileHash;
+
+    let verified = false;
+    verified = await contract.verifyFileHash(hexHash);
+
+    //send response
     res.json({
         status: 'success',
         data: {
             downloadLink: fileData.downloadLink,
-            expiresAt: new Date(fileData.expiresAt).toISOString()
+            expiresAt: new Date(fileData.expiresAt).toISOString(),
+            message: verified ? "✅ File verified on blockchain" : "⚠ File not verified on blockchain (This means the file may have been edited after upload)"
         }
     });
 });
