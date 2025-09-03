@@ -1,5 +1,6 @@
 const catchAsync = require(`${__dirname}/../utils/catchAsync`);
 const AppError = require(`${__dirname}/../utils/appErrors`);
+const File = require(`${__dirname}/../Models/fileModel`);
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
@@ -19,7 +20,7 @@ const storage = multer.diskStorage({
         cb(null, 'file-uploads/')
     },
     filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        const uniqueSuffix = Math.round(Math.random() * 1E9);
         const ext = path.extname(file.originalname); // Gets ".jpg", ".pdf", etc.
         const basename = path.basename(file.originalname, ext); // Gets "report" from "report.pdf"
         cb(null, `${basename}-${uniqueSuffix}${ext}`);
@@ -49,7 +50,7 @@ const upload = multer({
     storage: storage, 
     fileFilter: fileFilter,
     limits: {
-        fileSize: 5 * 1024 * 1024 * 1024 // 5GB limit
+        fileSize: 300 * 1024 * 1024// 300 MB limit
     }
 })
 
@@ -72,7 +73,7 @@ exports.fsUpload =[
         // generate file hash
         const fileHash = generateFileHash(req.file.path);
         const hexHash = "0x" + fileHash;
-
+        console.log("✅ File ");
         // send filehash to the network
         const tx = await contract.uploadFileHash(hexHash);
         await tx.wait(); // wait for transaction to be mined
