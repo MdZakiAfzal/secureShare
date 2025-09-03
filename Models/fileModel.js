@@ -56,6 +56,18 @@ const fileSchema = new mongoose.Schema({
     createdAt: {
         type: Date,
         default: Date.now
+    },
+    allowedCities: [{
+        type: String,
+        trim: true
+    }],
+    accessLocation: {
+        type: {
+            type: String,
+            enum: ['anywhere', 'specific-cities'],
+            default: 'anywhere'
+        },
+        cities: [String]
     }
 });
 

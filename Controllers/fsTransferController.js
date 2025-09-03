@@ -1,6 +1,7 @@
 const catchAsync = require(`${__dirname}/../utils/catchAsync`);
 const AppError = require(`${__dirname}/../utils/appErrors`);
 const File = require(`${__dirname}/../Models/fileModel`);
+const { getCityFromIP, validateCityAccess } = require(`${__dirname}/../utils/geolocation`);
 const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
@@ -68,6 +69,10 @@ exports.fsUpload =[
             return next(new AppError('Please upload a file first', 404));
         }
 
+        // Get cities from request body
+        const { cities } = req.body;
+        const allowedCities = cities ? cities.split(',').map(city => city.trim()) : [];
+
         // generate file hash
         const fileHash = generateFileHash(req.file.path);
         const hexHash = "0x" + fileHash;
@@ -93,7 +98,12 @@ exports.fsUpload =[
             blockchainTxHash: receipt.hash,
             uploadedBy: req.user._id,
             shareToken: token,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+            allowedCities: allowedCities, // NEW FIELD
+            accessLocation: { // NEW FIELD
+                type: allowedCities.length > 0 ? 'specific-cities' : 'anywhere',
+                cities: allowedCities
+            }
         });
 
         const shareableLink = `${req.protocol}://${req.get('host')}/api/files/share/${token}`;
@@ -109,7 +119,8 @@ exports.fsUpload =[
                 mimetype: req.file.mimetype
             },
             shareableLink: shareableLink,
-            downloadLink: downloadLink
+            downloadLink: downloadLink,
+            allowedCities: allowedCities
         })
     })
 ];
@@ -156,8 +167,8 @@ exports.fsShare = catchAsync(async (req, res, next) => {
     }
 
     // Increment download count
-    fileData.downloadCount += 1;
-    await fileData.save();
+    //fileData.downloadCount += 1;
+    //await fileData.save();
 
     const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${fileData.filename}`;
 
@@ -209,6 +220,24 @@ exports.fsDownload = catchAsync(async (req, res, next) => {
         return next(new AppError('Expired download link', 404));
     }
 
+    // Check city access if restricted
+    if (fileData.accessLocation.type === 'specific-cities' && 
+        fileData.allowedCities.length > 0) {
+        
+        // Get user's city from IP
+        const userIP = req.ip || req.connection.remoteAddress;
+        const userCity = await getCityFromIP(userIP);
+        
+        const hasAccess = validateCityAccess(userCity, fileData.allowedCities);
+        
+        if (!hasAccess) {
+            return next(new AppError(
+                `Access denied. This file is only available in: ${fileData.allowedCities.join(', ')}. Your detected location: ${userCity || 'Unknown'}`,
+                403
+            ));
+        }
+    }
+
     // Set appropriate Content-Type based on file extension
     const fileExt = path.extname(filename).toLowerCase();
     const mimeTypes = {
@@ -218,7 +247,9 @@ exports.fsDownload = catchAsync(async (req, res, next) => {
         '.ppt': 'application/vnd.ms-powerpoint',
         '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         '.jpeg': 'image/jpeg',
-        '.png': 'image/png'
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.txt': 'text/plain'
     };
 
     // Increment download count

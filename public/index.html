@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>File Sharing App</title>
+    <title>SecureShare - Blockchain File Sharing</title>
     <style>
         * {
             margin: 0;
@@ -76,10 +76,16 @@
             cursor: pointer;
             font-size: 14px;
             margin-right: 10px;
+            position: relative;
         }
 
         button:hover {
             background-color: #0056b3;
+        }
+
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
         }
 
         .nav-buttons {
@@ -138,11 +144,116 @@
         .logout-btn:hover {
             background-color: #c82333;
         }
+
+        /* Loading animation */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .upload-progress {
+            margin-top: 15px;
+            padding: 10px;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+            display: none;
+        }
+
+        .progress-bar {
+            height: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 5px;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 12px;
+            text-align: center;
+            color: #6c757d;
+        }
+
+        /* New styles for enhancements */
+        .qrcode {
+            display: block;
+            margin: 10px auto;
+            max-width: 150px;
+        }
+
+        .file-preview {
+            max-width: 100%;
+            max-height: 200px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .pdf-preview {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .no-preview {
+            padding: 20px;
+            text-align: center;
+            background-color: #f8f9fa;
+            border: 1px dashed #ddd;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .verified-badge {
+            display: inline-block;
+            background-color: #28a745;
+            color: white;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .warning-badge {
+            display: inline-block;
+            background-color: #ffc107;
+            color: #212529;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+
+        .file-preview-container {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px dashed #ddd;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>File Sharing App</h1>
+        <h1>SecureShare - Blockchain File Sharing</h1>
         
         <div class="user-info" id="userInfo">
             <span id="userDetails"></span>
@@ -169,7 +280,7 @@
                     <label for="loginPassword">Password:</label>
                     <input type="password" id="loginPassword" required>
                 </div>
-                <button type="submit">Login</button>
+                <button type="submit" id="loginSubmitBtn">Login</button>
             </form>
             <div class="response" id="loginResponse"></div>
         </div>
@@ -194,7 +305,7 @@
                     <label for="confirmPassword">Confirm Password:</label>
                     <input type="password" id="confirmPassword" required>
                 </div>
-                <button type="submit">Sign Up</button>
+                <button type="submit" id="signupSubmitBtn">Sign Up</button>
             </form>
             <div class="response" id="signupResponse"></div>
         </div>
@@ -207,8 +318,21 @@
                     <label for="fileInput">Choose File:</label>
                     <input type="file" id="fileInput" required accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.ppt,.pptx,.txt">
                 </div>
-                <button type="submit">Upload File</button>
+                <div class="form-group">
+                    <label for="citiesInput">Allowed Cities (comma-separated, leave empty for worldwide access):</label>
+                    <input type="text" id="citiesInput" placeholder="e.g., New York, London, Tokyo">
+                </div>
+                <button type="submit" id="uploadSubmitBtn">Upload File</button>
             </form>
+            
+            <!-- Upload Progress Indicator -->
+            <div class="upload-progress" id="uploadProgress">
+                <div class="progress-bar">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                </div>
+                <div class="progress-text" id="progressText">Preparing upload...</div>
+            </div>
+            
             <div class="response" id="uploadResponse"></div>
         </div>
 
@@ -220,17 +344,18 @@
                     <label for="shareToken">Share Token or URL:</label>
                     <input type="text" id="shareToken" placeholder="Enter token or full share URL" required>
                 </div>
-                <button type="submit">Get Download Link</button>
+                <button type="submit" id="shareSubmitBtn">Get Download Link</button>
             </form>
             <div class="response" id="shareResponse"></div>
         </div>
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <script>
         // Global variables
         let currentUser = null;
         let authToken = null;
-        const API_BASE = 'http://localhost:3000/api'; // Change this to your server URL
+        const API_BASE = 'http://localhost:3000/api';
 
         // Check if user is already logged in
         window.onload = function() {
@@ -242,21 +367,21 @@
                 currentUser = JSON.parse(savedUser);
                 showLoggedInState();
             }
+            
+            // Add file preview functionality
+            document.getElementById('fileInput').addEventListener('change', previewFile);
         };
 
         // Navigation functions
         function showSection(sectionName) {
-            // Hide all sections
             document.querySelectorAll('.section').forEach(section => {
                 section.classList.remove('active');
             });
             
-            // Remove active class from all nav buttons
             document.querySelectorAll('.nav-buttons button').forEach(btn => {
                 btn.classList.remove('active');
             });
             
-            // Show selected section and activate button
             document.getElementById(sectionName + 'Section').classList.add('active');
             document.getElementById(sectionName + 'Btn').classList.add('active');
         }
@@ -265,13 +390,11 @@
             document.getElementById('userInfo').style.display = 'block';
             document.getElementById('userDetails').textContent = `Welcome, ${currentUser.name}!`;
             
-            // Show upload and share buttons, hide auth buttons
             document.getElementById('uploadBtn').style.display = 'inline-block';
             document.getElementById('shareBtn').style.display = 'inline-block';
             document.getElementById('signupBtn').style.display = 'none';
             document.getElementById('loginBtn').style.display = 'none';
             
-            // Switch to upload section
             showSection('upload');
         }
 
@@ -290,9 +413,96 @@
             showSection('login');
         }
 
+        // Loading state functions
+        function setLoading(buttonId, isLoading) {
+            const button = document.getElementById(buttonId);
+            if (isLoading) {
+                button.disabled = true;
+                button.innerHTML = `<span class="loading"></span> Processing...`;
+            } else {
+                button.disabled = false;
+                // Reset button text based on ID
+                if (buttonId === 'uploadSubmitBtn') {
+                    button.innerHTML = 'Upload File';
+                } else if (buttonId === 'loginSubmitBtn') {
+                    button.innerHTML = 'Login';
+                } else if (buttonId === 'signupSubmitBtn') {
+                    button.innerHTML = 'Sign Up';
+                } else if (buttonId === 'shareSubmitBtn') {
+                    button.innerHTML = 'Get Download Link';
+                }
+            }
+        }
+
+        function showUploadProgress(show, percentage = 0, text = "") {
+            const progressElement = document.getElementById('uploadProgress');
+            const progressBar = document.getElementById('progressBarFill');
+            const progressText = document.getElementById('progressText');
+            
+            if (show) {
+                progressElement.style.display = 'block';
+                progressBar.style.width = percentage + '%';
+                progressText.textContent = text;
+            } else {
+                progressElement.style.display = 'none';
+            }
+        }
+
+        // File preview functionality
+        function previewFile() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) return;
+            
+            let previewContainer = document.getElementById('filePreview');
+            if (!previewContainer) {
+                previewContainer = document.createElement('div');
+                previewContainer.id = 'filePreview';
+                previewContainer.className = 'file-preview-container';
+                fileInput.parentNode.insertBefore(previewContainer, fileInput.nextSibling);
+            }
+            
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                let previewHTML = '';
+                if (file.type.includes('image')) {
+                    previewHTML = `<img src="${e.target.result}" class="file-preview" alt="File preview">`;
+                } else if (file.type.includes('pdf')) {
+                    previewHTML = `<embed src="${e.target.result}" class="pdf-preview" type="application/pdf">`;
+                } else {
+                    previewHTML = `<div class="no-preview">Preview not available for ${file.type}</div>`;
+                }
+                
+                previewContainer.innerHTML = `
+                    ${previewHTML}
+                    <div><strong>Name:</strong> ${file.name}</div>
+                    <div><strong>Type:</strong> ${file.type}</div>
+                    <div><strong>Size:</strong> ${(file.size / 1024).toFixed(2)} KB</div>
+                `;
+            };
+            
+            reader.readAsDataURL(file);
+        }
+
+        // QR code generation
+        function generateQRCode(shareableLink, elementId) {
+            QRCode.toDataURL(shareableLink, function (err, url) {
+                if (err) {
+                    console.error('QR code generation error:', err);
+                    return;
+                }
+                document.getElementById(elementId).innerHTML = `
+                    <img src="${url}" alt="QR Code" class="qrcode">
+                    <p style="text-align: center; font-size: 12px; margin-top: 5px;">Scan to share</p>
+                `;
+            });
+        }
+
         // API functions
         async function signup(event) {
             event.preventDefault();
+            setLoading('signupSubmitBtn', true);
             
             const name = document.getElementById('signupName').value;
             const email = document.getElementById('signupEmail').value;
@@ -301,6 +511,7 @@
             
             if (password !== confirmPassword) {
                 showResponse('signupResponse', 'Passwords do not match!', 'error');
+                setLoading('signupSubmitBtn', false);
                 return;
             }
             
@@ -328,11 +539,14 @@
                 }
             } catch (error) {
                 showResponse('signupResponse', 'Network error. Please try again.', 'error');
+            } finally {
+                setLoading('signupSubmitBtn', false);
             }
         }
 
         async function login(event) {
             event.preventDefault();
+            setLoading('loginSubmitBtn', true);
             
             const email = document.getElementById('loginEmail').value;
             const password = document.getElementById('loginPassword').value;
@@ -361,22 +575,35 @@
                 }
             } catch (error) {
                 showResponse('loginResponse', 'Network error. Please try again.', 'error');
+            } finally {
+                setLoading('loginSubmitBtn', false);
             }
         }
 
         async function uploadFile(event) {
             event.preventDefault();
+            setLoading('uploadSubmitBtn', true);
+            showUploadProgress(true, 10, "Preparing file for upload...");
             
             const fileInput = document.getElementById('fileInput');
+            const citiesInput = document.getElementById('citiesInput');
             const file = fileInput.files[0];
+            const cities = citiesInput.value;
             
             if (!file) {
                 showResponse('uploadResponse', 'Please select a file', 'error');
+                setLoading('uploadSubmitBtn', false);
+                showUploadProgress(false);
                 return;
             }
             
+            showUploadProgress(true, 30, "Uploading to server...");
+            
             const formData = new FormData();
             formData.append('file', file);
+            if (cities) {
+                formData.append('cities', cities);
+            }
             
             try {
                 const response = await fetch(`${API_BASE}/files/upload`, {
@@ -387,36 +614,71 @@
                     body: formData
                 });
                 
+                showUploadProgress(true, 70, "Processing with blockchain...");
+                
                 const data = await response.json();
                 
                 if (response.ok) {
+                    showUploadProgress(true, 90, "Finalizing...");
+                    
+                    let citiesInfo = '';
+                    if (data.allowedCities && data.allowedCities.length > 0) {
+                        citiesInfo = `<br><strong>Allowed Cities:</strong> ${data.allowedCities.join(', ')}`;
+                    } else {
+                        citiesInfo = `<br><strong>Access:</strong> Worldwide`;
+                    }
+                    
+                    const qrCodeId = `qrcode-${Date.now()}`;
                     const fileInfo = `
                         <div class="file-info">
                             <strong>File uploaded successfully!</strong><br>
                             <strong>Original Name:</strong> ${data.fileData.originalname}<br>
-                            <strong>Size:</strong> ${(data.fileData.size / 1024).toFixed(2)} KB<br>
+                            <strong>Size:</strong> ${(data.fileData.size / 1024).toFixed(2)} KB
+                            ${citiesInfo}
                             <strong>Shareable Link:</strong> 
                             <input type="text" value="${data.shareableLink}" readonly style="width: 100%; margin-top: 5px;">
                             <button onclick="copyToClipboard('${data.shareableLink}')" style="margin-top: 5px;">Copy Link</button>
+                            <div id="${qrCodeId}" style="text-align: center; margin-top: 10px;"></div>
                         </div>
                     `;
                     showResponse('uploadResponse', fileInfo, 'success');
-                    fileInput.value = ''; // Clear the input
+                    
+                    // Generate QR code
+                    setTimeout(() => {
+                        generateQRCode(data.shareableLink, qrCodeId);
+                    }, 100);
+                    
+                    // Clear inputs
+                    fileInput.value = '';
+                    citiesInput.value = '';
+                    
+                    // Clear preview
+                    const previewContainer = document.getElementById('filePreview');
+                    if (previewContainer) {
+                        previewContainer.innerHTML = '';
+                    }
+                    
+                    showUploadProgress(true, 100, "Upload complete!");
+                    setTimeout(() => showUploadProgress(false), 1500);
                 } else {
                     showResponse('uploadResponse', data.message || 'Upload failed', 'error');
+                    showUploadProgress(false);
                 }
             } catch (error) {
                 showResponse('uploadResponse', 'Network error. Please try again.', 'error');
+                showUploadProgress(false);
+            } finally {
+                setLoading('uploadSubmitBtn', false);
             }
         }
 
         async function accessSharedFile(event) {
             event.preventDefault();
+            setLoading('shareSubmitBtn', true);
             
             let tokenInput = document.getElementById('shareToken').value.trim();
             let token;
             
-            // Extract token from URL if full URL is provided
             if (tokenInput.includes('/share/')) {
                 token = tokenInput.split('/share/')[1];
             } else {
@@ -428,10 +690,26 @@
                 const data = await response.json();
                 
                 if (response.ok) {
+                    let locationInfo = '';
+                    if (data.data.allowedCities && data.data.allowedCities.length > 0) {
+                        locationInfo = `<br><strong>Allowed in:</strong> ${data.data.allowedCities.join(', ')}`;
+                    } else {
+                        locationInfo = `<br><strong>Access:</strong> Worldwide`;
+                    }
+                    
+                    const verificationBadge = data.data.message.includes('verified') ? 
+                        '<span class="verified-badge">Verified</span>' : 
+                        '<span class="warning-badge">Not Verified</span>';
+                    
                     const fileInfo = `
                         <div class="file-info">
-                            <strong>File found!</strong><br>
+                            <strong>File found! ${verificationBadge}</strong><br>
+                            <strong>Original Name:</strong> ${data.data.originalName}<br>
+                            <strong>Size:</strong> ${(data.data.size / 1024).toFixed(2)} KB
+                            ${locationInfo}
                             <strong>Expires at:</strong> ${new Date(data.data.expiresAt).toLocaleString()}<br>
+                            <strong>Downloads:</strong> ${data.data.downloadCount}<br>
+                            <strong>Verification:</strong> ${data.data.message}<br>
                             <a href="${data.data.downloadLink}" target="_blank">
                                 <button style="margin-top: 10px; background-color: #28a745;">Download File</button>
                             </a>
@@ -443,6 +721,8 @@
                 }
             } catch (error) {
                 showResponse('shareResponse', 'Network error. Please try again.', 'error');
+            } finally {
+                setLoading('shareSubmitBtn', false);
             }
         }
 
@@ -453,7 +733,6 @@
             responseElement.className = `response ${type}`;
             responseElement.style.display = 'block';
             
-            // Auto-hide after 5 seconds for non-file-info messages
             if (!message.includes('file-info')) {
                 setTimeout(() => {
                     responseElement.style.display = 'none';
@@ -465,7 +744,6 @@
             navigator.clipboard.writeText(text).then(() => {
                 alert('Link copied to clipboard!');
             }).catch(() => {
-                // Fallback for older browsers
                 const textArea = document.createElement('textarea');
                 textArea.value = text;
                 document.body.appendChild(textArea);
