@@ -54,8 +54,6 @@ const upload = multer({
     }
 })
 
-const fileStore = new Map();
-
 // Generate File hash Function
 const generateFileHash = (filePath) => {
   const fileBuffer = fs.readFileSync(filePath);
@@ -73,29 +71,45 @@ exports.fsUpload =[
         // generate file hash
         const fileHash = generateFileHash(req.file.path);
         const hexHash = "0x" + fileHash;
-        console.log("✅ File ");
+
         // send filehash to the network
         const tx = await contract.uploadFileHash(hexHash);
-        await tx.wait(); // wait for transaction to be mined
-        console.log("✅ File hash stored on-chain.");
+        const receipt = await tx.wait(); // wait for transaction to be mined
+        console.log("✅ File hash stored on-chain. Tx Hash: ", receipt.hash);
         
         //Set file Metadata and share Link
         const token = crypto.randomBytes(16).toString('hex');
 
         const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${req.file.filename}`;
     
-        fileStore.set(token, {
+        // Create file metadata in database
+        const newFile = await File.create({
+            originalName: req.file.originalname,
             filename: req.file.filename,
-            downloadLink: downloadLink,
-            expiresAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+            path: req.file.path,
+            size: req.file.size,
+            mimetype: req.file.mimetype,
+            fileHash: fileHash,
+            blockchainTxHash: receipt.hash,
+            uploadedBy: req.user._id,
+            shareToken: token,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
         });
+
         const shareableLink = `${req.protocol}://${req.get('host')}/api/files/share/${token}`;
 
         //send response
         res.status(201).json({
             status: 'success',
-            fileData: req.file,
-            shareableLink: shareableLink
+            //fileData: req.file,
+            fileData: {
+                originalname: req.file.originalname,
+                filename: req.file.filename,
+                size: req.file.size,
+                mimetype: req.file.mimetype
+            },
+            shareableLink: shareableLink,
+            downloadLink: downloadLink
         })
     })
 ];
@@ -104,51 +118,95 @@ exports.fsShare = catchAsync(async (req, res, next) => {
     const { token } = req.params;
 
     // Verify token exists
-    const fileData = fileStore.get(token);
+    const fileData = await File.findOne({ shareToken: token }).populate('uploadedBy', 'name email');;
 
     if(!fileData){
         return next(new AppError(`Invalid Token: ${token}`, 404));
     }
 
     // Verify file exits
-    const filePath = path.join('file-uploads', fileData.filename);
+    //const filePath = path.join('file-uploads', fileData.filename);
 
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(fileData.path)) {
+        await File.findByIdAndDelete(fileData._id);
         return next(new AppError('File not found', 404));
     }
 
     //Check expiry
-    if (fileData.expiresAt < Date.now()) {
+    if (fileData.expiresAt < new Date()) {
         // Cleanup
-        fileStore.delete(token); 
-        fs.unlinkSync(filePath);
+        try {
+            fs.unlinkSync(fileData.path);
+        } catch (err) {
+            console.error('Error deleting expired file:', err);
+        }
+        await File.findByIdAndDelete(fileData._id);
         return next(new AppError('Expired download link', 404));
     }
 
     //verify file from Blockchain
-    const fileHash = generateFileHash(filePath);
+    const fileHash = generateFileHash(fileData.path);
     const hexHash = "0x" + fileHash;
 
     let verified = false;
-    verified = await contract.verifyFileHash(hexHash);
+    try {
+        verified = await contract.verifyFileHash(hexHash);
+    } catch (error) {
+        console.error('Blockchain verification error:', error);
+    }
 
-    //send response
+    // Increment download count
+    fileData.downloadCount += 1;
+    await fileData.save();
+
+    const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${fileData.filename}`;
+
+    // Send response
     res.json({
         status: 'success',
         data: {
-            downloadLink: fileData.downloadLink,
-            expiresAt: new Date(fileData.expiresAt).toISOString(),
-            message: verified ? "✅ File verified on blockchain" : "⚠ File not verified on blockchain (This means the file may have been edited after upload)"
+            originalName: fileData.originalName,
+            size: fileData.size,
+            uploadedBy: fileData.uploadedBy.name,
+            downloadLink: downloadLink,
+            expiresAt: fileData.expiresAt,
+            downloadCount: fileData.downloadCount,
+            message: verified ? 
+                "✅ File verified on blockchain" : 
+                "⚠ File not verified on blockchain (This means the file may have been edited after upload)"
         }
     });
 });
 
 exports.fsDownload = catchAsync(async (req, res, next) => {
     const { filename } = req.params;
+    //const filePath = path.join('file-uploads', filename);
+
+    // Find file in database
+    const fileData = await File.findOne({ filename });
+
+    if (!fileData) {
+        return next(new AppError('File not found', 404));
+    }
+
     const filePath = path.join('file-uploads', filename);
 
     if (!fs.existsSync(filePath)) {
+        // Remove from database if file doesn't exist
+        await File.findByIdAndDelete(fileData._id);
         return next(new AppError('File not found', 404));
+    }
+
+    // Check expiry
+    if (fileData.expiresAt < new Date()) {
+        // Cleanup - delete file and database record
+        try {
+            fs.unlinkSync(filePath);
+        } catch (err) {
+            console.error('Error deleting expired file:', err);
+        }
+        await File.findByIdAndDelete(fileData._id);
+        return next(new AppError('Expired download link', 404));
     }
 
     // Set appropriate Content-Type based on file extension
@@ -163,6 +221,37 @@ exports.fsDownload = catchAsync(async (req, res, next) => {
         '.png': 'image/png'
     };
 
+    // Increment download count
+    fileData.downloadCount += 1;
+    await fileData.save();
+
     res.setHeader('Content-Type', mimeTypes[fileExt] || 'application/octet-stream');
-    res.download(filePath, filename);
+    res.setHeader('Content-Disposition', `attachment; filename="${fileData.originalName}"`);
+    res.download(filePath, fileData.originalName);
+});
+
+// Optional: Add a cleanup function for expired files
+exports.cleanupExpiredFiles = catchAsync(async (req, res, next) => {
+    const expiredFiles = await File.find({ 
+        expiresAt: { $lt: new Date() } 
+    });
+    
+    let deletedCount = 0;
+    
+    for (const file of expiredFiles) {
+        try {
+            if (fs.existsSync(file.path)) {
+                fs.unlinkSync(file.path);
+            }
+            await File.findByIdAndDelete(file._id);
+            deletedCount++;
+        } catch (err) {
+            console.error(`Error deleting file ${file.filename}:`, err);
+        }
+    }
+    
+    res.status(200).json({
+        status: 'success',
+        message: `Cleaned up ${deletedCount} expired files`
+    });
 });

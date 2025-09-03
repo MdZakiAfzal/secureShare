@@ -61,6 +61,14 @@ userSchema.methods.changedPasswordAfter = function(JWTTimestamp){
     return false;
 }   
 
+userSchema.virtual('files', {
+    ref: 'File',
+    foreignField: 'uploadedBy',
+    localField: '_id'
+});
 
+// Enable virtuals when converting to JSON
+userSchema.set('toJSON', { virtuals: true });
+userSchema.set('toObject', { virtuals: true });
 
 module.exports = mongoose.model('User', userSchema)
