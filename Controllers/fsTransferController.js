@@ -154,7 +154,7 @@ exports.fsUpload =[
 
 exports.fsShare = catchAsync(async (req, res, next) => {
     const { token } = req.params;
-    const { password } = req.body; // Expect password in request body
+    const password = req.body?.password || ''; 
 
     const fileData = await File.findOne({ shareToken: token }).select('+password');
 
