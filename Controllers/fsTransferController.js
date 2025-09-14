@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 const catchAsync = require(`${__dirname}/../utils/catchAsync`);
 const AppError = require(`${__dirname}/../utils/appErrors`);
 const File = require(`${__dirname}/../Models/fileModel`);
@@ -6,6 +7,9 @@ const multer = require('multer');
 const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
+const stream = require('stream');
+const util = require('util');
+const bcrypt = require('bcryptjs');
 
 //Blockhain setup
 const { ethers } = require("ethers");
@@ -14,6 +18,9 @@ const contractABI = require(`${__dirname}/../blockchain/contractABI.json`);
 const provider = new ethers.JsonRpcProvider(process.env.INFURA_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 const contract = new ethers.Contract(process.env.CONTRACT_ADDRESS, contractABI, wallet);
+
+// Promisify pipeline for async/await usage
+const pipeline = util.promisify(stream.pipeline);
 
 //Logic for File upload to the Database
 const storage = multer.diskStorage({
@@ -55,10 +62,24 @@ const upload = multer({
     }
 })
 
-// Generate File hash Function
-const generateFileHash = (filePath) => {
-  const fileBuffer = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(fileBuffer).digest('hex');
+// Generate File hash Function with streaming for large files
+const generateFileHash = async (filePath) => {
+  const hash = crypto.createHash('sha256');
+  const fileStream = fs.createReadStream(filePath);
+  
+  return new Promise((resolve, reject) => {
+    fileStream.on('data', (chunk) => {
+      hash.update(chunk);
+    });
+    
+    fileStream.on('end', () => {
+      resolve(hash.digest('hex'));
+    });
+    
+    fileStream.on('error', (error) => {
+      reject(new AppError('Error reading file for hash generation', 500));
+    });
+  });
 };
 
 // Controllers
@@ -69,12 +90,17 @@ exports.fsUpload =[
             return next(new AppError('Please upload a file first', 404));
         }
 
-        // Get cities from request body
-        const { cities } = req.body;
+        const { cities, password } = req.body;
         const allowedCities = cities ? cities.split(',').map(city => city.trim()) : [];
+        let hashedPassword = null; // Initialize hashedPassword to null
 
-        // generate file hash
-        const fileHash = generateFileHash(req.file.path);
+        // Hash the password if provided and not an empty string
+        if (password && password.length > 0) {
+            hashedPassword = await bcrypt.hash(password, 12);
+        }
+
+        // generate file hash using streaming for better memory efficiency
+        const fileHash = await generateFileHash(req.file.path);
         const hexHash = "0x" + fileHash;
 
         // send filehash to the network
@@ -99,11 +125,12 @@ exports.fsUpload =[
             uploadedBy: req.user._id,
             shareToken: token,
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-            allowedCities: allowedCities, // NEW FIELD
-            accessLocation: { // NEW FIELD
+            allowedCities: allowedCities,
+            accessLocation: {
                 type: allowedCities.length > 0 ? 'specific-cities' : 'anywhere',
                 cities: allowedCities
-            }
+            },
+            password: hashedPassword // Save the hashed password
         });
 
         const shareableLink = `${req.protocol}://${req.get('host')}/api/files/share/${token}`;
@@ -111,41 +138,48 @@ exports.fsUpload =[
         //send response
         res.status(201).json({
             status: 'success',
-            //fileData: req.file,
             fileData: {
-                originalname: req.file.originalname,
+                originalName: req.file.originalname,
                 filename: req.file.filename,
                 size: req.file.size,
                 mimetype: req.file.mimetype
             },
             shareableLink: shareableLink,
             downloadLink: downloadLink,
-            allowedCities: allowedCities
+            allowedCities: allowedCities,
+            password: password ? true : false // Return a boolean indicating password protection
         })
     })
 ];
 
 exports.fsShare = catchAsync(async (req, res, next) => {
     const { token } = req.params;
+    const { password } = req.body; // Expect password in request body
 
-    // Verify token exists
-    const fileData = await File.findOne({ shareToken: token }).populate('uploadedBy', 'name email');;
+    const fileData = await File.findOne({ shareToken: token }).select('+password');
 
     if(!fileData){
         return next(new AppError(`Invalid Token: ${token}`, 404));
     }
 
-    // Verify file exits
-    //const filePath = path.join('file-uploads', fileData.filename);
+    // Check if password is required and provided
+    if (fileData.password) {
+        if (!password) {
+            return next(new AppError('This file is password protected. Please provide a password.', 401));
+        }
+        const isPasswordCorrect = await bcrypt.compare(password, fileData.password);
+        if (!isPasswordCorrect) {
+            return next(new AppError('Incorrect password', 401));
+        }
+    }
 
     if (!fs.existsSync(fileData.path)) {
         await File.findByIdAndDelete(fileData._id);
         return next(new AppError('File not found', 404));
     }
 
-    //Check expiry
+    // Check expiry
     if (fileData.expiresAt < new Date()) {
-        // Cleanup
         try {
             fs.unlinkSync(fileData.path);
         } catch (err) {
@@ -155,8 +189,8 @@ exports.fsShare = catchAsync(async (req, res, next) => {
         return next(new AppError('Expired download link', 404));
     }
 
-    //verify file from Blockchain
-    const fileHash = generateFileHash(fileData.path);
+    // Verify file from Blockchain
+    const fileHash = await generateFileHash(fileData.path);
     const hexHash = "0x" + fileHash;
 
     let verified = false;
@@ -166,19 +200,13 @@ exports.fsShare = catchAsync(async (req, res, next) => {
         console.error('Blockchain verification error:', error);
     }
 
-    // Increment download count
-    //fileData.downloadCount += 1;
-    //await fileData.save();
-
     const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${fileData.filename}`;
 
-    // Send response
     res.json({
         status: 'success',
         data: {
             originalName: fileData.originalName,
             size: fileData.size,
-            uploadedBy: fileData.uploadedBy.name,
             downloadLink: downloadLink,
             expiresAt: fileData.expiresAt,
             downloadCount: fileData.downloadCount,
@@ -256,9 +284,23 @@ exports.fsDownload = catchAsync(async (req, res, next) => {
     fileData.downloadCount += 1;
     await fileData.save();
 
+    // Use streaming for efficient file download
+    const fileStream = fs.createReadStream(filePath);
+    
     res.setHeader('Content-Type', mimeTypes[fileExt] || 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${fileData.originalName}"`);
-    res.download(filePath, fileData.originalName);
+    res.setHeader('Content-Length', fileData.size);
+    
+    // Handle stream errors
+    fileStream.on('error', (error) => {
+        console.error('File stream error:', error);
+        if (!res.headersSent) {
+            return next(new AppError('Error streaming file', 500));
+        }
+    });
+    
+    // Pipe the file stream to the response
+    fileStream.pipe(res);
 });
 
 // Optional: Add a cleanup function for expired files

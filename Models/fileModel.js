@@ -53,6 +53,10 @@ const fileSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
+    password: {
+        type: String,
+        select: false, // Do not send password to the client by default
+    },
     createdAt: {
         type: Date,
         default: Date.now
@@ -70,6 +74,10 @@ const fileSchema = new mongoose.Schema({
         cities: [String]
     }
 });
+
+fileSchema.methods.comparePassword = async function(enteredPassword, filePassword) {
+    return await bcrypt.compare(enteredPassword, filePassword);
+}
 
 // Index for efficient queries
 fileSchema.index({ shareToken: 1 });

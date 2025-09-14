@@ -26,6 +26,11 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(limiter);
+app.use((req, res, next) => {
+    req.setTimeout(120000); // 2 minutes
+    res.setTimeout(120000);
+    next();
+});
  
 //Routes
 app.use("/api/files", fsTransferRouter);

@@ -2,21 +2,6 @@ require('dotenv').config()
 const app = require(`${__dirname}/app`)
 const mongoose = require('mongoose');
 
-/*
-const DBString = process.env.DB_STRING
-mongoose.connect(DBString)
-    .then(()=> console.log('DB connected successfully!'))
-    .catch(err => console.log(err));
-
-//startMoralis();
-
-const port = process.env.PORT || 3000
-app.listen(port, ()=>{
-    console.log(`server is running on port ${port}...`)
-});*/
-
-
-
 const port = process.env.PORT || 3000;
 const DBString = process.env.DB_STRING;
 async function startServer() {
