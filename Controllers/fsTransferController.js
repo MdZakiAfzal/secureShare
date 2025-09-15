@@ -10,6 +10,7 @@ const fs = require('fs');
 const stream = require('stream');
 const util = require('util');
 const bcrypt = require('bcryptjs');
+const { sendEmail } = require(`${__dirname}/../utils/email`);
 
 //Blockhain setup
 const { ethers } = require("ethers");
@@ -153,68 +154,92 @@ exports.fsUpload =[
 ];
 
 exports.fsShare = catchAsync(async (req, res, next) => {
-    const { token } = req.params;
-    const password = req.body?.password || ''; 
+  const { token } = req.params;
+  const password = req.body?.password || ''; // safe destructure
 
-    const fileData = await File.findOne({ shareToken: token }).select('+password');
+  // Find file and populate uploader info
+  const fileData = await File.findOne({ shareToken: token })
+    .select('+password')
+    .populate('uploadedBy', 'email name'); // adjust based on your User schema
 
-    if(!fileData){
-        return next(new AppError(`Invalid Token: ${token}`, 404));
+  if (!fileData) {
+    return next(new AppError(`Invalid Token: ${token}`, 404));
+  }
+
+  // Password check
+  if (fileData.password) {
+    if (!password) {
+      return next(new AppError('This file is password protected. Please provide a password.', 401));
     }
-
-    // Check if password is required and provided
-    if (fileData.password) {
-        if (!password) {
-            return next(new AppError('This file is password protected. Please provide a password.', 401));
-        }
-        const isPasswordCorrect = await bcrypt.compare(password, fileData.password);
-        if (!isPasswordCorrect) {
-            return next(new AppError('Incorrect password', 401));
-        }
+    const isPasswordCorrect = await bcrypt.compare(password, fileData.password);
+    if (!isPasswordCorrect) {
+      return next(new AppError('Incorrect password', 401));
     }
+  }
 
-    if (!fs.existsSync(fileData.path)) {
-        await File.findByIdAndDelete(fileData._id);
-        return next(new AppError('File not found', 404));
-    }
+  // File existence check
+  if (!fs.existsSync(fileData.path)) {
+    await File.findByIdAndDelete(fileData._id);
+    return next(new AppError('File not found', 404));
+  }
 
-    // Check expiry
-    if (fileData.expiresAt < new Date()) {
-        try {
-            fs.unlinkSync(fileData.path);
-        } catch (err) {
-            console.error('Error deleting expired file:', err);
-        }
-        await File.findByIdAndDelete(fileData._id);
-        return next(new AppError('Expired download link', 404));
-    }
+  // Expiry check
+  if (fileData.expiresAt < new Date()) {
+    try { fs.unlinkSync(fileData.path); } catch (err) { console.error('Error deleting expired file:', err); }
+    await File.findByIdAndDelete(fileData._id);
+    return next(new AppError('Expired download link', 404));
+  }
 
-    // Verify file from Blockchain
-    const fileHash = await generateFileHash(fileData.path);
-    const hexHash = "0x" + fileHash;
+  // Blockchain verification
+  const fileHash = await generateFileHash(fileData.path);
+  const hexHash = "0x" + fileHash;
 
-    let verified = false;
+  let verified = false;
+  try {
+    verified = await contract.verifyFileHash(hexHash);
+  } catch (error) {
+    console.error('Blockchain verification error:', error);
+  }
+
+  // If not verified → send email alert to uploader
+  if (!verified && fileData.uploadedBy && fileData.uploadedBy.email) {
+    const uploaderEmail = fileData.uploadedBy.email;
+    const uploaderName = fileData.uploadedBy.name || 'user';
+
+    const subject = `⚠️ File Tampering Alert: ${fileData.originalName}`;
+    const message = `Hi ${uploaderName},\n\n` +
+      `The file "${fileData.originalName}" (share token: ${token}) failed blockchain verification and may have been tampered with.\n\n` +
+      `If possible, please investigate and consider re-uploading the original.\n\n` +
+      `-- SecureShare`;
+
     try {
-        verified = await contract.verifyFileHash(hexHash);
-    } catch (error) {
-        console.error('Blockchain verification error:', error);
+      await sendEmail({
+        to: uploaderEmail,
+        subject,
+        text: message
+      });
+      console.log(`📧 Tamper alert sent to ${uploaderEmail}`);
+    } catch (mailErr) {
+      console.error('❌ Failed to send tamper alert email:', mailErr);
     }
+  }
 
-    const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${fileData.filename}`;
+  // Build response
+  const downloadLink = `${req.protocol}://${req.get('host')}/api/files/download/${fileData.filename}`;
 
-    res.json({
-        status: 'success',
-        data: {
-            originalName: fileData.originalName,
-            size: fileData.size,
-            downloadLink: downloadLink,
-            expiresAt: fileData.expiresAt,
-            downloadCount: fileData.downloadCount,
-            message: verified ? 
-                "✅ File verified on blockchain" : 
-                "⚠ File not verified on blockchain (This means the file may have been edited after upload)"
-        }
-    });
+  res.json({
+    status: 'success',
+    data: {
+      originalName: fileData.originalName,
+      size: fileData.size,
+      downloadLink: downloadLink,
+      expiresAt: fileData.expiresAt,
+      downloadCount: fileData.downloadCount,
+      message: verified ?
+        "✅ File verified on blockchain" :
+        "⚠ File not verified on blockchain (Possible tampering detected)"
+    }
+  });
 });
 
 exports.fsDownload = catchAsync(async (req, res, next) => {
