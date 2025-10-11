@@ -338,6 +338,7 @@ input:focus {
     transition: var(--transition);
     text-decoration: none;
     display: inline-block;
+    margin-top: 1rem;
 }
 
 .btn-success:hover {

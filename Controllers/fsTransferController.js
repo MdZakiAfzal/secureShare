@@ -353,3 +353,14 @@ exports.cleanupExpiredFiles = catchAsync(async (req, res, next) => {
         message: `Cleaned up ${deletedCount} expired files`
     });
 });
+
+exports.fsGetMyFiles = catchAsync(async (req, res, next) => {
+    // Assuming req.user is populated by a middleware (e.g., authController.protect)
+    const files = await File.find({ uploadedBy: req.user._id }).sort('-uploadedAt');
+
+    res.status(200).json({
+        status: 'success',
+        results: files.length,
+        files
+    });
+});

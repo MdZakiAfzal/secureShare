@@ -9,5 +9,6 @@ Router.route("/upload").post(authController.protect, fsTransferController.fsUplo
 Router.route("/share/:token").post(fsTransferController.fsShare)
 Router.route("/download/:filename").get(fsTransferController.fsDownload)
 Router.route("/cleanup").delete(authController.protect, fsTransferController.cleanupExpiredFiles) // Admin only
+Router.route('/my-files').get(authController.protect,fsTransferController.fsGetMyFiles); 
 
 module.exports = Router;

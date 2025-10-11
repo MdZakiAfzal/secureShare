@@ -11,14 +11,16 @@ const sections = {
     login: document.getElementById('loginSection'),
     signup: document.getElementById('signupSection'),
     upload: document.getElementById('uploadSection'),
-    share: document.getElementById('shareSection')
+    share: document.getElementById('shareSection'),
+    dashboard: document.getElementById('dashboardSection')
 };
 
 const navButtons = {
     login: document.getElementById('navLoginBtn'),
     signup: document.getElementById('navSignupBtn'),
     upload: document.getElementById('navUploadBtn'),
-    share: document.getElementById('navShareBtn')
+    share: document.getElementById('navShareBtn'),
+    dashboard: document.getElementById('navDashboardBtn')
 };
 
 const fileInput = document.getElementById('fileInput');
@@ -26,6 +28,8 @@ const uploadArea = document.getElementById('uploadArea');
 const fileDetailsPanel = document.getElementById('fileDetailsPanel');
 const userInfo = document.getElementById('userInfo');
 const userDetails = document.getElementById('userDetails');
+const fileListContainer = document.getElementById('fileListContainer');
+const dashboardResponseDiv = document.getElementById('dashboardResponse');
 
 // Initialize application
 document.addEventListener('DOMContentLoaded', function() {
@@ -41,6 +45,7 @@ function setupEventListeners() {
     });
 
     document.getElementById('logoutBtn').addEventListener('click', logout);
+    navButtons.dashboard.addEventListener('click', showDashboard);
 
     // Forms
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
@@ -87,10 +92,11 @@ function showLoggedInState() {
     
     navButtons.upload.style.display = 'inline-block';
     navButtons.share.style.display = 'inline-block';
+    navButtons.dashboard.style.display = 'inline-block';
     navButtons.login.style.display = 'none';
     navButtons.signup.style.display = 'none';
     
-    showSection('upload');
+    showDashboard();
 }
 
 function logout() {
@@ -102,6 +108,7 @@ function logout() {
     userInfo.style.display = 'none';
     navButtons.upload.style.display = 'none';
     navButtons.share.style.display = 'none';
+    navButtons.dashboard.style.display = 'none';
     navButtons.login.style.display = 'inline-block';
     navButtons.signup.style.display = 'inline-block';
     
@@ -398,7 +405,6 @@ async function handleUpload(e) {
 }
 
 // Handle Share Access
-async // Handle Share Access
 async function handleShare(e) {
     e.preventDefault();
 
@@ -443,6 +449,81 @@ async function handleShare(e) {
         setButtonLoading(submitBtn, false);
     }
 }
+
+// New function to handle dashboard view
+async function showDashboard() {
+    showSection('dashboard');
+    hideAlert(dashboardResponseDiv);
+    fileListContainer.innerHTML = 'Loading your files...';
+
+    try {
+        const response = await fetch(`${API_BASE}/files/my-files`, {
+            method: 'GET',
+            headers: { 
+                'Authorization': `Bearer ${authToken}`,
+                'Content-Type': 'application/json' 
+            },
+            signal: AbortSignal.timeout(10000)
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            renderFileList(data.files);
+        } else {
+            showAlert(dashboardResponseDiv, data.message || 'Failed to load files.', 'error');
+            fileListContainer.innerHTML = '';
+        }
+
+    } catch (error) {
+        console.error('Dashboard files error:', error);
+        showAlert(dashboardResponseDiv, 'Network error. Please try again.', 'error');
+        fileListContainer.innerHTML = '';
+    }
+}
+
+// New function to render the list of files
+function renderFileList(files) {
+    if (!files || files.length === 0) {
+        fileListContainer.innerHTML = `
+            <div class="empty-state">
+                <svg class="empty-state-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v2a2 2 0 01-2 2H5a2 2 0 01-2-2v-2a2 2 0 012-2m14 0V9a2 2 0 00-2-2H8m2-4v4m0 0a2 2 0 01-2 2H5a2 2 0 00-2 2v2a2 2 0 002 2h11m-1m4-4H9.5a2.5 2.5 0 01-2.5-2.5V9a2.5 2.5 0 012.5-2.5H12"></path>
+                </svg>
+                <p>You haven't uploaded any files yet.</p>
+            </div>
+        `;
+        return;
+    }
+
+    let html = '';
+    files.forEach(file => {
+        const expires = new Date(file.expiresAt).toLocaleString();
+        const cities = file.allowedCities.length > 0 ? file.allowedCities.join(', ') : 'Worldwide';
+        const isPasswordProtected = file.password ? 'Password Protected' : 'No Password';
+        const shareLink = `${window.location.protocol}//${window.location.host}/api/files/share/${file.shareToken}`;
+
+        html += `
+            <div class="share-item" style="margin-bottom: 1.5rem;">
+                <h4 style="margin-bottom: 0.5rem; color: var(--primary-blue);">${file.originalName}</h4>
+                <p><strong>Size:</strong> ${formatFileSize(file.size)}</p>
+                <p><strong>Type:</strong> ${file.mimetype}</p>
+                <p><strong>Access:</strong> ${cities}</p>
+                <p><strong>Security:</strong> ${isPasswordProtected}</p>
+                <p><strong>Downloads:</strong> ${file.downloadCount}</p>
+                <p><strong>Expires:</strong> ${expires}</p>
+                <div style="margin-top: 1rem;">
+                    <input type="text" class="share-input" value="${shareLink}" readonly id="link-${file._id}">
+                    <button class="btn-secondary" onclick="copyToClipboard('link-${file._id}')" style="margin-top: 0.5rem;">Copy Link</button>
+                    <a href="${shareLink}" class="btn-secondary" style="margin-top: 0.5rem; margin-left: 0.5rem;">View Details</a>
+                </div>
+            </div>
+        `;
+    });
+
+    fileListContainer.innerHTML = html;
+}
+
 
 // Display after successful upload
 function displayUploadSuccess(data) {
